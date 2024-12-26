@@ -1,0 +1,616 @@
+import SwiftUI
+
+extension DefaultBottomSheet {
+    public enum Options: Equatable {
+        /// Adds a handle bar to our bottom sheet
+        case enableHandleBar
+        /// Blocks the user from interacting with view behind bottom sheet
+        case blockContent
+        /// Tapping outside of the sheet will trigger a dismissal (blocks content by default)
+        case tapAwayToDismiss
+        /// Adds a shadow behind the bottom sheet. Can be modified via BottomSheetStyle
+        case enableShadow
+        /// Adds swipe gesture support - swiping the view down will trigger a dismissal
+        case swipeToDismiss
+    }
+}
+
+// MARK: - DefaultBottomSheet.Option flags
+
+extension DefaultBottomSheet {
+    private var hasHandleBar: Bool {
+        options.contains(.enableHandleBar)
+    }
+    
+    private var tapAwayToDismiss: Bool {
+        options.contains(.tapAwayToDismiss)
+    }
+    
+    private var blockContent: Bool {
+        options.contains(.blockContent)
+    }
+    
+    private var hasShadow: Bool {
+        options.contains(.enableShadow)
+    }
+    
+    private var swipeToDismiss: Bool {
+        options.contains(.swipeToDismiss)
+    }
+}
+
+// MARK: - DefaultBottomSheetView
+
+public struct DefaultBottomSheet<Content: View>: View {
+
+    @Binding var isOpen: Bool
+    
+    let style: DefaultBottomSheetStyle
+    
+    let options: [DefaultBottomSheet.Options]
+
+    let maxWidth: CGFloat?
+
+    let content: Content
+
+    @State var contentSize: CGSize = .zero
+    @State var offset :CGFloat = 0
+    @State private var previousDragValue: DragGesture.Value?
+    
+    @AccessibilityFocusState private var focused: Bool
+    
+    @State  var positiveButtonText: String?
+    @State  var negativeButtonText: String?
+    var title: String?
+    var message: String?
+    var positiveButtonAction: (() -> Void)?
+    var negativeButtonAction: (() -> Void)?
+    @State private var isPositiveButtonEnabled = true
+    @State private var isDragable: Bool
+    @State var textButtonWithoutTimer :String? = ""
+    @State var lottieRaw :String
+    @State var timerDuration: TimeInterval? = nil
+    @State private var isTimerRunning = false
+    @State private var remainingTime: TimeInterval = 0
+    private let timerInterval: TimeInterval = 1
+    
+    private var formattedRemainingTime: String {
+        let seconds = Int(remainingTime) % 60
+        return String(format: "%d", seconds)
+    }
+    
+    public init(
+        isOpen: Binding<Bool>,
+        style: DefaultBottomSheetStyle = .defaultStyle(),
+        options: [DefaultBottomSheet.Options] = [.enableHandleBar, .tapAwayToDismiss,.enableShadow],
+        maxWidth: CGFloat? = nil,
+        title: String? = nil,
+        message: String? = nil,
+        positiveButtonText: String? = nil,
+        negativeButtonText: String? = nil,
+        timerDuration: TimeInterval? = nil,
+        ltRaw : String = "" ,
+        dragable :Bool = true,
+        positiveButtonAction: (() -> Void)? = nil,
+        negativeButtonAction: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self._isOpen = isOpen
+        self.style = style
+        self.options = options
+        self.maxWidth = maxWidth
+        self.content = content()
+        
+        self.title = title
+        self.message = message
+        self.positiveButtonText = positiveButtonText
+        self.textButtonWithoutTimer = positiveButtonText
+        self.negativeButtonText = negativeButtonText
+        self.positiveButtonAction = positiveButtonAction
+        self.negativeButtonAction = negativeButtonAction
+        self.timerDuration = timerDuration
+        self.isDragable = dragable
+        lottieRaw = ltRaw
+        if timerDuration != nil {
+            self.isPositiveButtonEnabled = false
+        }
+     
+        
+        
+    }
+    
+    public var body: some View {
+        ZStack(alignment: .bottom) {
+            if isOpen, (tapAwayToDismiss || blockContent) {
+                style.dimmingColor.opacity(0.5)
+                    .ignoresSafeArea()
+                    .accessibilityAction(.escape, {
+                        isOpen = false
+                    })
+                    .onTapGesture {
+                        if tapAwayToDismiss {
+                            self.isOpen = false
+                        }
+                    }
+            }
+            if isOpen {
+                VStack(spacing: 0) {
+                 
+                        dragBar
+                        .transition(.slide)
+                            .frame(
+                                idealWidth: maxWidth != nil ? maxWidth! : .infinity,
+                                maxWidth: maxWidth != nil ? maxWidth! : .infinity,
+                                idealHeight: style.handleBarHeight,
+                                maxHeight: style.handleBarHeight
+                            )
+                           
+                            .padding(.top, 4)
+                            .padding(.bottom , 8)
+                    
+                    if !lottieRaw.isEmpty {
+                        CustomLottieView(animName: lottieRaw, loopMode: .playOnce)
+                            .frame(width: 120,height: 120)
+                            .transition(.move(edge: .bottom))
+                        
+                    }
+                    if let title = title {
+                        Tv(title,Color.textPrimary ,font: Fonts.bold(withSize: 17))
+                            .frame(maxWidth: .infinity)
+                            .transition(.move(edge: .bottom))
+                        
+                    }
+                    
+                    if let message = message {
+                        Tv(message , Color.textSecondary)
+                            .frame(maxWidth: .infinity)
+                            .transition(.move(edge: .bottom))
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 1)
+                            .padding(.bottom, 10)
+                    }
+                    
+                    content
+                        .transition(.move(edge: .bottom))
+                        .frame(maxWidth:.infinity)
+                        .padding(.top , 8)
+                        .padding(4)
+                    
+                    
+                    HStack(spacing: 4) {
+                        if negativeButtonText != nil {
+                            CappButton(icon: nil, title: negativeButtonText!, buttonStyle: .fail, width: .matchParent, action: {
+                                negativeButtonAction?()
+                            })
+                            
+                            
+                            
+                        }
+                        
+                        if positiveButtonText != nil {
+                            CappButton(
+                                icon: nil,
+                                title: buttonText(),
+                                buttonStyle: timerDuration != nil && !isPositiveButtonEnabled ? .secondary : .success,
+                                width: .matchParent,
+                                isEnable:  $isPositiveButtonEnabled,
+                                action: {
+                                    if timerDuration != nil && isPositiveButtonEnabled {
+                                        positiveButtonAction?()
+                                    }else if timerDuration == nil {
+                                        positiveButtonAction?()
+                                    }
+                                    
+                                }
+                            )
+                            
+                            
+                        }
+                    }
+                    .transition(.move(edge: .bottom))
+                }
+                .padding(.bottom ,UIDevice.current.hasNotch  ? 35 : 8)
+                .padding(.horizontal , 10)
+                .background(style.backgroundColor)
+                .modifier(KeyboardAdaptive())
+                .cornerRadius(style.cornerRadius, corners: [.topLeft, .topRight])
+                .offset(y:offset)
+                .shadow(
+                    color: hasShadow ? style.shadowColor : .clear,
+                    radius: style.shadowRadius, x: style.shadowX, y: style.shadowY
+                )
+                .transition(.move(edge: .bottom))
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if isDragable {
+                              offset = max(value.translation.height, 0)
+                            }
+                          }
+                          .onEnded { value in
+                               if isDragable {
+                                  if value.translation.height > 150 {
+                                                  withAnimation(.easeInOut) {
+                                                      isOpen = false
+                                                  }
+                                 } else {
+                                                  withAnimation(.easeInOut) {
+                                                      offset = 0
+                                                  }
+                                              }
+                                          }
+                                      }
+                )
+                .accessibilityAddTraits(.isModal)
+                
+            }
+        }
+        .transition(.move(edge: .bottom))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+       
+        .animation(.easeInOut, value: isOpen)
+        .ignoresSafeArea()
+        .onChange(of: isOpen) { isOpen in
+            if isOpen {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    focused = true
+                }
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    focused = false
+                }
+            }
+        }
+    }
+    
+    private var dragBar: some View {
+        ZStack {
+            
+            RoundedRectangle(cornerRadius: 5.0 / 2.0)
+                .frame(width: 40, height: 5.0)
+                .foregroundColor(style.handleBarColor)
+                .padding(8)
+                .frame(height: 44)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityFocused($focused, equals: true)
+                .accessibilityHint("Double tap to dismiss")
+                .accessibilityLabel("Sheet grabber")
+                .accessibilityAction {
+                    DispatchQueue.main.async {
+                        isOpen = false
+                    }
+                }
+            ZStack(alignment: .trailing){
+                Image(icon.closeColor.rawValue)
+                    
+                    .resizable()
+                    .renderingMode(.template)
+                   
+                    .frame(width: 26 , height: 26)
+                   
+                   .onClicked {
+                        
+                        self.isOpen = false
+                    }
+                   .padding(.top , 15)
+                  
+                   .padding(.trailing , -6)
+            }
+            .frame(maxWidth: .infinity,alignment: .trailing)
+               
+        }
+      
+        .frame(maxWidth: .infinity)
+    }
+    
+    func buttonText()->String {
+        return  if timerDuration != nil && !isPositiveButtonEnabled {
+            positiveButtonText! + " (" + formattedRemainingTime + ") "
+        }
+        else if timerDuration != nil && isPositiveButtonEnabled {
+            textButtonWithoutTimer ?? ""
+        } else  {
+            positiveButtonText!
+        }
+    }
+    private func startTimer() {
+        guard let duration = timerDuration else { return }
+        
+        isTimerRunning = true
+        remainingTime = duration
+        DispatchQueue.main.async {
+            isPositiveButtonEnabled = false  // Enable the positive button after the timer finishes
+        }
+        Timer.scheduledTimer(withTimeInterval: timerInterval, repeats: true) { timer in
+            remainingTime -= timerInterval
+            if remainingTime <= 0 {
+                timer.invalidate()
+                isTimerRunning = false
+                
+                positiveButtonText = textButtonWithoutTimer
+                
+                DispatchQueue.main.async {
+                    withAnimation(.interactiveSpring ) {
+                        isPositiveButtonEnabled = true
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - DragGesture onDragChanged & onDragEnded extensions
+
+extension DefaultBottomSheet {
+    
+    /* private func dragGesture() -> _EndedGesture<_ChangedGesture<DragGesture>> {
+       DragGesture(minimumDistance: 0.1, coordinateSpace: .local)
+            .onChanged(onDragChanged)
+            .onEnded(onDragEnded)
+        
+    }*/
+    
+    private func onDragChanged(drag: DragGesture.Value) {
+        guard isOpen, swipeToDismiss else { return }
+        let yOffset = drag.translation.height
+        
+        guard let previousValue = previousDragValue else {
+            previousDragValue = drag
+            return
+        }
+        
+        let previousOffsetY = previousValue.translation.height
+        let timeDiff = Double(drag.time.timeIntervalSince(previousValue.time))
+        let heightDiff = Double(yOffset - previousOffsetY)
+        let yVelocity = heightDiff / timeDiff
+        if yVelocity > 1200 {
+            isOpen = false
+            return
+        }
+    }
+    
+    private func onDragEnded(drag: DragGesture.Value) {
+        guard isOpen, swipeToDismiss else { return }
+        let yOffset = drag.translation.height
+        if yOffset > contentSize.height * 0.2 {
+            isOpen = false
+        }
+    }
+}
+import Foundation
+import SwiftUI
+@available(iOS 15, *)
+extension View {
+    public func bottomSheetPresenter<Content: View>(
+        isPresented: Binding<Bool>,
+        detents: [UISheetPresentationController.Detent] = [.medium(), .large()],
+        showHandleBar: Bool = false,
+        scrollExapandEdges: Bool = true,
+        edgeAttachedInCompactHeight: Bool = false,
+        widthFollowsPreferredContentSizeWhenEdgeAttached: Bool = false,
+        largestUndimmedDetentIdentifier: UISheetPresentationController.Detent.Identifier? = nil,
+        isModalInPresentation: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        self.modifier(
+            BottomSheetPresenter<Any, Content>(
+                isPresented: isPresented,
+                detents: detents,
+                showHandleBar: showHandleBar,
+                scrollExapandEdges: scrollExapandEdges,
+                edgeAttachedInCompactHeight: edgeAttachedInCompactHeight,
+                widthFollowsPreferredContentSizeWhenEdgeAttached: widthFollowsPreferredContentSizeWhenEdgeAttached,
+                largestUndimmedDetentIdentifier: largestUndimmedDetentIdentifier,
+                isModalInPresentation: isModalInPresentation,
+                content: content
+            )
+        )
+    }
+}
+
+@available(iOS 15, *)
+struct BottomSheetPresenter<T: Any, BodyContent: View>: ViewModifier {
+
+    @Binding var isPresented: Bool
+    let detents: [UISheetPresentationController.Detent]
+    let showHandleBar: Bool
+    let scrollExapandEdges: Bool
+    let edgeAttachedInCompactHeight: Bool
+    let widthFollowsPreferredContentSizeWhenEdgeAttached: Bool
+    let largestUndimmedDetentIdentifier: UISheetPresentationController.Detent.Identifier?
+    let isModalInPresentation: Bool
+    let bodyContent: BodyContent
+
+    @State private var bottomSheetPresenterVC: BottomSheetPresenterViewController<BodyContent>?
+
+    private var topMostVC: UIViewController? {
+        let keyWindow = UIApplication.shared.connectedScenes
+            .flatMap { ($0 as? UIWindowScene)?.windows ?? [] }
+            .first { $0.isKeyWindow }
+
+        if var topController = keyWindow?.rootViewController {
+            while let presentedVC = topController.presentedViewController {
+                topController = presentedVC
+            }
+            return topController
+        }
+        return nil
+    }
+
+    init(
+        isPresented: Binding<Bool>,
+        detents: [UISheetPresentationController.Detent] = [.medium(), .large()],
+        showHandleBar: Bool = false,
+        scrollExapandEdges: Bool = true,
+        edgeAttachedInCompactHeight: Bool = false,
+        widthFollowsPreferredContentSizeWhenEdgeAttached: Bool = false,
+        largestUndimmedDetentIdentifier: UISheetPresentationController.Detent.Identifier? = nil,
+        isModalInPresentation: Bool = false,
+        @ViewBuilder content: () -> BodyContent
+    ) {
+        self._isPresented = isPresented
+        self.detents = detents
+        self.showHandleBar = showHandleBar
+        self.scrollExapandEdges = scrollExapandEdges
+        self.edgeAttachedInCompactHeight = edgeAttachedInCompactHeight
+        self.widthFollowsPreferredContentSizeWhenEdgeAttached = widthFollowsPreferredContentSizeWhenEdgeAttached
+        self.largestUndimmedDetentIdentifier = largestUndimmedDetentIdentifier
+        self.isModalInPresentation = isModalInPresentation
+        self.bodyContent = content()
+    }
+
+    func body(content: Content) -> some View {
+        bottomSheetContent(content)
+    }
+
+    private func bottomSheetContent(_ content: Content) -> some View {
+        content
+            .onChange(of: isPresented) { presented in
+                if presented {
+                    bottomSheetPresenterVC = BottomSheetPresenterViewController(
+                        isPresented: $isPresented,
+                        detents: detents,
+                        showHandleBar: showHandleBar,
+                        scrollExapandEdges: scrollExapandEdges,
+                        edgeAttachedInCompactHeight: edgeAttachedInCompactHeight,
+                        widthFollowsPreferredContentSizeWhenEdgeAttached: widthFollowsPreferredContentSizeWhenEdgeAttached,
+                        largestUndimmedDetentIdentifier: largestUndimmedDetentIdentifier,
+                        isModalInPresentation: isModalInPresentation,
+                        content: bodyContent
+                    )
+                    bottomSheetPresenterVC?.modalPresentationStyle = .pageSheet
+                    topMostVC?.present(bottomSheetPresenterVC!, animated: true)
+                } else {
+                    bottomSheetPresenterVC?.dismiss(animated: true)
+                }
+            }
+    }
+
+}
+
+@available(iOS 15, *)
+class BottomSheetPresenterViewController<Content: View>: UIViewController {
+    @Binding var isPresented: Bool
+
+    private let detents: [UISheetPresentationController.Detent]
+    private let prefersGrabberVisible: Bool
+    private let prefersScrollingExpandsWhenScrolledToEdge: Bool
+    private let prefersEdgeAttachedInCompactHeight: Bool
+    private let widthFollowsPreferredContentSizeWhenEdgeAttached: Bool
+    private let largestUndimmedDetentIdentifier: UISheetPresentationController.Detent.Identifier?
+    private let content: UIHostingController<Content>
+
+    init(
+        isPresented: Binding<Bool>,
+        detents: [UISheetPresentationController.Detent] = [.medium(), .large()],
+        showHandleBar: Bool = false,
+        scrollExapandEdges: Bool = true,
+        edgeAttachedInCompactHeight: Bool = false,
+        widthFollowsPreferredContentSizeWhenEdgeAttached: Bool = false,
+        largestUndimmedDetentIdentifier: UISheetPresentationController.Detent.Identifier? = nil,
+        isModalInPresentation: Bool = false,
+        content: Content
+    ) {
+        self._isPresented = isPresented
+        self.detents = detents
+        self.prefersGrabberVisible = showHandleBar
+        self.prefersScrollingExpandsWhenScrolledToEdge = scrollExapandEdges
+        self.prefersEdgeAttachedInCompactHeight = edgeAttachedInCompactHeight
+        self.widthFollowsPreferredContentSizeWhenEdgeAttached = widthFollowsPreferredContentSizeWhenEdgeAttached
+        self.largestUndimmedDetentIdentifier = largestUndimmedDetentIdentifier
+        self.content = UIHostingController(rootView: content)
+        super.init(nibName: nil, bundle: nil)
+        self.isModalInPresentation = isModalInPresentation
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("No Storyboards")
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        addChild(content)
+        view.addSubview(content.view)
+        content.view.translatesAutoresizingMaskIntoConstraints = false
+
+        NSLayoutConstraint.activate([
+            content.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            content.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            content.view.topAnchor.constraint(equalTo: view.topAnchor),
+            content.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
+        if let sheetController = self.presentationController as? UISheetPresentationController {
+            sheetController.detents = detents
+            sheetController.prefersGrabberVisible = prefersGrabberVisible
+            sheetController.prefersScrollingExpandsWhenScrolledToEdge = prefersScrollingExpandsWhenScrolledToEdge
+            sheetController.prefersEdgeAttachedInCompactHeight = prefersEdgeAttachedInCompactHeight
+            sheetController.widthFollowsPreferredContentSizeWhenEdgeAttached = widthFollowsPreferredContentSizeWhenEdgeAttached
+            sheetController.largestUndimmedDetentIdentifier = largestUndimmedDetentIdentifier
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        isPresented = false
+    }
+}
+import Foundation
+import SwiftUI
+
+public struct DefaultBottomSheetStyle {
+    public let backgroundColor: Color
+    public let cornerRadius: CGFloat
+    public let dimmingColor: Color
+    public let handleBarColor: Color
+    public let handleBarHeight: CGFloat
+    public let shadowColor: Color
+    public let shadowRadius: CGFloat
+    public let shadowX: CGFloat
+    public let shadowY: CGFloat
+  //  public let openAnimation: Animation
+    
+    public init(
+        backgroundColor: Color = Color.background,
+        cornerRadius: CGFloat = 8.0,
+        dimmingColor: Color = Color.black,
+        handleBarColor: Color = Color.gray,
+        handleBarHeight: CGFloat = 8.0,
+        shadowColor: Color = Color.black.opacity(0.25),
+        shadowRadius: CGFloat = 10.0,
+        shadowX: CGFloat = 0.0,
+        shadowY: CGFloat = -5.0
+      //  openAnimation: Animation = .spring(response: 0.5, dampingFraction: 0.9, blendDuration: 0.75)
+    ) {
+        self.backgroundColor = backgroundColor
+        self.cornerRadius = cornerRadius
+        self.dimmingColor = dimmingColor
+        self.handleBarColor = handleBarColor
+        self.handleBarHeight = handleBarHeight
+        self.shadowColor = shadowColor
+        self.shadowRadius = shadowRadius
+        self.shadowX = shadowX
+        self.shadowY = shadowY
+      //  self.openAnimation = openAnimation
+    }
+}
+
+// MARK: - Default BottomSheet style extension
+
+extension DefaultBottomSheetStyle {
+    public static func defaultStyle() -> DefaultBottomSheetStyle {
+        DefaultBottomSheetStyle(
+            backgroundColor: Color.background,
+            cornerRadius: 10,
+            dimmingColor: Color.black,
+            handleBarColor: Color.gray,
+            handleBarHeight: 8.0,
+            shadowColor: Color.black.opacity(0.25),
+            shadowRadius: 10.0,
+            shadowX: 0.0,
+            shadowY: -5.0
+          //  openAnimation:    .transition(.move(edge: .bottom))
+        )
+    }
+}
